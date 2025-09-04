@@ -1,6 +1,6 @@
-import * as ReactDOM from 'react-dom';
 import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import * as operations from './operations';
+import type { Root } from 'react-dom/client';
 
 export class NNDropdown implements ComponentFramework.StandardControl<IInputs, IOutputs> {
 
@@ -8,7 +8,7 @@ export class NNDropdown implements ComponentFramework.StandardControl<IInputs, I
   private _container: HTMLDivElement;
   private _notifyOutputChanged: () => void;
 
-  // mirrored labels → written to bound text column (boundField)
+  // mirrored labels → written to bound text column (must match manifest prop)
   private _mirrorValue: string = "";
 
   constructor() { }
@@ -39,13 +39,15 @@ export class NNDropdown implements ComponentFramework.StandardControl<IInputs, I
   }
 
   public getOutputs(): IOutputs {
-    // IMPORTANT: must match your manifest property name. You showed "boundField".
     return {
+      // If you renamed in manifest, change "boundField" to that name (e.g., mirrorText)
       boundField: this._mirrorValue
     };
   }
 
   public destroy(): void {
-    ReactDOM.unmountComponentAtNode(this._container);
+    // Unmount React 18 root cleanly
+    const root = (operations as any).roots?.get(this._container) as Root | undefined;
+    if (root) root.unmount();
   }
 }
