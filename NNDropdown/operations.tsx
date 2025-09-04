@@ -16,6 +16,13 @@ export function _writeLog(message: string, data?: any) {
   }
 }
 
+export function _labelsForOptions(allOptions: DropDownOption[], selectedKeys: string[]) {
+  return allOptions
+    .filter(o => selectedKeys.includes(o.key))
+    .map(o => o.text)
+    .join(", ");
+}
+
 export async function _getAvailableOptions(context: ComponentFramework.Context<IInputs>, setting: Setting) {
   const baseFetchXml = `<fetch><entity name="${setting.targetEntityName}" /></fetch>`;
   const userFetchXml = setting.targetEntityFilter ? setting.targetEntityFilter : "";
