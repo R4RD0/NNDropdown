@@ -1,19 +1,19 @@
 import { IInputs } from "./generated/ManifestTypes";
 import * as webAPIHelper from "./webAPIHelper";
-import { EntityReference, Setting, DropDownOption, DropDownData, Globals } from "./interface";
+import { EntityReference, Setting, DropDownOption, DropDownData } from "./interface";
 import * as ReactDOM from 'react-dom';
-import * as React from 'react'
+import * as React from 'react';
 import * as dropdown from './fluentUIDropdown';
 
-export async function _sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+// ----- helpers -----
+function getParam(context: ComponentFramework.Context<IInputs>, name: string): string {
+  const p = (context.parameters as unknown as Record<string, any>);
+  return p?.[name]?.raw ?? "";
 }
 
-export function _writeLog(message: string, data?: any) {
-  const condition = true;
-  if (condition) { //Needs to be set back to a shared value. Had issue when the control was on the form multiple times. Settings/Globals were mixed.
-    console.log(message, data);
-  }
+function log(context: ComponentFramework.Context<IInputs>, msg: string, data?: any) {
+  const enabled = (getParam(context, "enableLogging") || "").toLowerCase() === "true";
+  if (enabled) console.log(msg, data);
 }
 
 export function _labelsForOptions(allOptions: DropDownOption[], selectedKeys: string[]) {
@@ -23,159 +23,194 @@ export function _labelsForOptions(allOptions: DropDownOption[], selectedKeys: st
     .join(", ");
 }
 
+// Try to resolve:
+// - primaryFieldName (if missing) from target entity metadata
+// - relationShipEntityName (if missing) from ManyToMany metadata
+async function _resolveMetadata(context: ComponentFramework.Context<IInputs>, setting: Setting) {
+
+  // Resolve primary name attribute if not supplied
+  if (!setting.primaryFieldName) {
+    const tgtMeta = await context.utils.getEntityMetadata(setting.targetEntityName);
+    // PrimaryNameAttribute is standard Dataverse metadata
+    setting.primaryFieldName = (tgtMeta as any)?.PrimaryNameAttribute || setting.primaryFieldName;
+  }
+
+  // Resolve intersect entity if not supplied
+  if (!setting.relationShipEntityName && setting.relationShipName) {
+    const primaryMeta = await context.utils.getEntityMetadata(setting.primaryEntityName);
+    const targetMeta  = await context.utils.getEntityMetadata(setting.targetEntityName);
+
+    const relNameLower = setting.relationShipName.toLowerCase();
+
+    // Search both sides; match on either SchemaName OR nav property names
+    const findM2M = (meta: any) => {
+      const rels: any[] = (meta?.ManyToManyRelationships as any[]) || [];
+      return rels.find(r =>
+        (r.SchemaName && r.SchemaName.toLowerCase() === relNameLower) ||
+        (r.Entity1NavigationPropertyName && r.Entity1NavigationPropertyName.toLowerCase() === relNameLower) ||
+        (r.Entity2NavigationPropertyName && r.Entity2NavigationPropertyName.toLowerCase() === relNameLower)
+      );
+    };
+
+    let m2m = findM2M(primaryMeta) || findM2M(targetMeta);
+
+    // Fallback: if a nav property like "..._opportunity" was provided, trim suffix and try again
+    if (!m2m) {
+      const suffix = "_" + setting.primaryEntityName.toLowerCase();
+      if (relNameLower.endsWith(suffix)) {
+        const schemaGuess = setting.relationShipName.slice(0, -suffix.length);
+        const schemaLower = schemaGuess.toLowerCase();
+        const trySchema = (meta: any) => {
+          const rels: any[] = (meta?.ManyToManyRelationships as any[]) || [];
+          return rels.find(r => (r.SchemaName && r.SchemaName.toLowerCase() === schemaLower));
+        };
+        m2m = trySchema(primaryMeta) || trySchema(targetMeta);
+      }
+    }
+
+    if (m2m?.IntersectEntityName) {
+      setting.relationShipEntityName = m2m.IntersectEntityName;
+    } else {
+      log(context, "WARN: Could not auto-resolve IntersectEntityName from metadata. Ensure 'relationshipentityname' is configured.");
+    }
+  }
+
+  return setting;
+}
+
+export function _proccessSetting(context: ComponentFramework.Context<IInputs>) {
+  const setting: Setting = {
+    // @ts-ignore legacy PCF typings
+    primaryEntityId:   (context.page as any)?.entityId ?? "",
+    // @ts-ignore legacy PCF typings
+    primaryEntityName: (context.page as any)?.entityTypeName ?? "",
+    primaryFieldName:         getParam(context, "primaryfieldname"),
+    relationShipName:         getParam(context, "relationshipname"),
+    relationShipEntityName:   getParam(context, "relationshipentityname"), // optional in manifest
+    targetEntityName:         getParam(context, "targetentityname"),
+    targetEntityFilter:       getParam(context, "targetentityfilter"),
+  };
+  return setting;
+}
+
 export async function _getAvailableOptions(context: ComponentFramework.Context<IInputs>, setting: Setting) {
   const baseFetchXml = `<fetch><entity name="${setting.targetEntityName}" /></fetch>`;
   const userFetchXml = setting.targetEntityFilter ? setting.targetEntityFilter : "";
-  const fetchXml = userFetchXml != "" ? userFetchXml : baseFetchXml;
-  _writeLog("Using this FetchXML for all available options", fetchXml);
+  const fetchXml = userFetchXml !== "" ? userFetchXml : baseFetchXml;
 
+  log(context, "FetchXML (all options):", fetchXml);
   const allOptionsSet = await webAPIHelper.retrieveDataFetchXML(context, setting.targetEntityName, fetchXml);
-  _writeLog("Retrieved Data RAW allOptionsSet", allOptionsSet);
 
-  let allOptions: Array<DropDownOption> = new Array;
+  const allOptions: DropDownOption[] = allOptionsSet.entities.map((entity: any) => ({
+    key: entity[`${setting.targetEntityName}id`],
+    text: entity[setting.primaryFieldName]
+  }));
 
-  allOptionsSet.entities.forEach(entity => {
-    let item: DropDownOption = { key: entity[`${setting.targetEntityName}id`], text: entity[setting.primaryFieldName] }
-    allOptions.push(item);
-  });
-
-  allOptions.sort((a,b) => (a.text > b.text) ? 1 : ((b.text > a.text) ? -1 : 0))
-
+  allOptions.sort((a, b) => (a.text > b.text ? 1 : (b.text > a.text ? -1 : 0)));
   return allOptions;
 }
 
 export async function _currentOptions(context: ComponentFramework.Context<IInputs>, setting: Setting) {
-  const fetchXml: string =
-    `<fetch>
-      <entity name="${setting.relationShipEntityName}" >
+  const fetchXml = `
+    <fetch>
+      <entity name="${setting.relationShipEntityName}">
         <filter>
           <condition attribute="${setting.primaryEntityName}id" operator="eq" value="${setting.primaryEntityId}" />
         </filter>
       </entity>
     </fetch>`;
 
-  _writeLog("Using this FetchXML for all selected options", fetchXml);
-
+  log(context, "FetchXML (selected options):", fetchXml);
   const currentOptionsSet = await webAPIHelper.retrieveDataFetchXML(context, setting.relationShipEntityName, fetchXml);
-  _writeLog("Retrieved Data RAW currentOptionsSet", currentOptionsSet);
 
-  let currentOptions: Array<string> = new Array;
-
-  currentOptionsSet.entities.forEach(entity => {
-    currentOptions.push(entity[`${setting.targetEntityName}id`]);
-  });
-
-  return currentOptions;
-}
-
-export function _proccessSetting(context: ComponentFramework.Context<IInputs>) {
-  let setting: Setting = {
-    //@ts-ignore 
-    primaryEntityId: context.page.entityId ? context.page.entityId : "",
-    //@ts-ignore 
-    primaryEntityName: context.page.entityTypeName ? context.page.entityTypeName : "",
-    primaryFieldName: context.parameters.primaryfieldname.raw ? context.parameters.primaryfieldname.raw : "",
-    relationShipName: context.parameters.relationshipname.raw ? context.parameters.relationshipname.raw : "",
-    relationShipEntityName: context.parameters.relationshipentityname.raw ? context.parameters.relationshipentityname.raw : "",
-    targetEntityName: context.parameters.targetentityname.raw ? context.parameters.targetentityname.raw : "",
-    targetEntityFilter: context.parameters.targetentityfilter.raw ? context.parameters.targetentityfilter.raw : "",
-  }
-  return setting;
-}
-
-export function _processGlobals(context: ComponentFramework.Context<IInputs>) {
-  let globals = {
-    context: context,
-    enableLogging: context.parameters.enableLogging.raw?.toLowerCase() === "true" ? true : false
-  }
-  return globals;
+  return currentOptionsSet.entities.map((entity: any) => entity[`${setting.targetEntityName}id`]);
 }
 
 export function _associateRecord(context: ComponentFramework.Context<IInputs>, setting: Setting, targetEntityReference: EntityReference, relatedEntityReference: EntityReference) {
   return new Promise(function (resolve, reject) {
-
-    let manyToManyAssociateRequest = {
+    const req = {
       getMetadata: () => ({
         boundParameter: null,
         parameterTypes: {},
         operationType: 2,
         operationName: "Associate"
       }),
-
       relationship: setting.relationShipName,
       target: targetEntityReference,
-      relatedEntities: [relatedEntityReference] //Array to be able to associate multiple
-    }
+      relatedEntities: [relatedEntityReference]
+    };
 
-    _writeLog('Created Associate Request Object', manyToManyAssociateRequest);
+    log(context, 'Associate request', req);
 
-    //@ts-ignore
-    context.webAPI.execute(manyToManyAssociateRequest).then(
-      (success: any) => {
-        _writeLog("Success", success);
-        resolve(success);
-      },
-      (error: any) => {
-        _writeLog("Error", error);
-        reject(error);
-      }
-    )
-  })
+    // @ts-ignore PCF runtime provides webAPI.execute
+    context.webAPI.execute(req).then(resolve, (error: any) => {
+      log(context, "Associate error", error);
+      reject(error);
+    });
+  });
 }
 
 export function _disAssociateRecord(context: ComponentFramework.Context<IInputs>, setting: Setting, targetEntityReference: EntityReference, relatedEntityReference: EntityReference) {
   return new Promise(function (resolve, reject) {
-
-    let manyToManyDisassociateRequest = {
+    const req = {
       getMetadata: () => ({
         boundParameter: null,
         parameterTypes: {},
         operationType: 2,
         operationName: "Disassociate"
       }),
-
       relationship: setting.relationShipName,
       target: targetEntityReference,
       relatedEntityId: relatedEntityReference.id
-    }
+    };
 
-    _writeLog('Created Disassociate Request Object', manyToManyDisassociateRequest);
+    log(context, 'Disassociate request', req);
 
-    //@ts-ignore
-    context.webAPI.execute(manyToManyDisassociateRequest).then(
-      (success: any) => {
-        _writeLog("Success", success);
-        resolve(success);
-      },
-      (error: any) => {
-        _writeLog("Error", error);
-        reject(error);
-      }
-    )
-  })
+    // @ts-ignore PCF runtime provides webAPI.execute
+    context.webAPI.execute(req).then(resolve, (error: any) => {
+      log(context, "Disassociate error", error);
+      reject(error);
+    });
+  });
 }
 
-export async function _execute(context: ComponentFramework.Context<IInputs>, container: HTMLDivElement) {
+/**
+ * Entry point called by index.ts
+ */
+export async function _execute(
+  context: ComponentFramework.Context<IInputs>,
+  container: HTMLDivElement,
+  updateMirror?: (labels: string) => void
+) {
+  let setting = _proccessSetting(context);
+  log(context, "Settings (raw)", setting);
 
-  const _globals = _processGlobals(context);
-  _writeLog("Retrieved and Set Globals", _globals);
+  // Auto-resolve metadata (primary field + intersect entity)
+  setting = await _resolveMetadata(context, setting);
+  log(context, "Settings (resolved)", setting);
 
-  const _setting = _proccessSetting(context);
-  _writeLog("Retrieved Settings", _setting);
+  if (setting.primaryEntityId) {
+    const allOptions = await _getAvailableOptions(context, setting);
+    const selectedOptions = await _currentOptions(context, setting);
 
-  if (_setting.primaryEntityId) {
+    const labels = _labelsForOptions(allOptions, selectedOptions);
+    if (updateMirror) updateMirror(labels);
 
-    const dropDownData: DropDownData = {
-      allOptions: await _getAvailableOptions(context, _setting),
-      selectedOptions: await _currentOptions(context, _setting),
-    }
+    const dropDownData: DropDownData = { allOptions, selectedOptions };
 
-    _writeLog("Retrieved DropdownData", dropDownData);
-
-    ReactDOM.render(React.createElement(dropdown.NNDropdownControl, { context: context, setting: _setting, dropdowndata: dropDownData }), container);
-  }
-  else {
-    //@ts-ignore
+    ReactDOM.render(
+      React.createElement(dropdown.NNDropdownControl, {
+        context,
+        setting,
+        dropdowndata: dropDownData,
+        onChange: (newSelectedKeys: string[]) => {
+          const newLabels = _labelsForOptions(allOptions, newSelectedKeys);
+          if (updateMirror) updateMirror(newLabels);
+        }
+      }),
+      container
+    );
+  } else {
     const msg = <div>This record hasn't been created yet. To enable this control, create the record.</div>;
     ReactDOM.render(msg, container);
   }

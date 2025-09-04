@@ -1,53 +1,51 @@
 import * as React from 'react';
 import { Dropdown, IDropdownOption, IDropdownStyles } from '@fluentui/react/lib/Dropdown';
-import * as operations from './operations';
 import { EntityReference, Setting, DropDownData } from "./interface";
 import { IInputs } from './generated/ManifestTypes';
 import { useState } from 'react';
-import { inputProperties } from '@fluentui/react';
+import * as operations from './operations';
 
-const dropdownStyles: Partial<IDropdownStyles> = { title: { border: 'none', backgroundColor: '#F5F5F5' }};
+const dropdownStyles: Partial<IDropdownStyles> = {
+  title: { border: 'none', backgroundColor: '#F5F5F5' }
+};
 
-export const NNDropdownControl: React.FC<{ context: ComponentFramework.Context<IInputs>, setting: Setting, dropdowndata: DropDownData }> = ({ context, setting, dropdowndata }) => {
+export const NNDropdownControl: React.FC<{
+  context: ComponentFramework.Context<IInputs>,
+  setting: Setting,
+  dropdowndata: DropDownData,
+  onChange?: (selectedKeys: string[]) => void
+}> = ({ context, setting, dropdowndata, onChange }) => {
 
-  console.log("In render Control", setting, dropdowndata);
+  const targetRef: EntityReference = { entityType: setting.primaryEntityName, id: setting.primaryEntityId };
+  const [selectedKeys, setSelectedKeys] = useState<string[]>(dropdowndata.selectedOptions || []);
 
-  let targetRef: EntityReference = { entityType: setting.primaryEntityName, id: setting.primaryEntityId }; 
+  const handleChange = (event: React.FormEvent<HTMLDivElement>, item: IDropdownOption, index: number): void => {
+    if (!item) return;
 
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+    let newSelected: string[];
 
-  const onChange = (event: React.FormEvent<HTMLDivElement>, item: IDropdownOption, index: number): void => {
-
-    if (item) {
-
-      setSelectedKeys(
-        item.selected ? [...selectedKeys, item.key as string] : selectedKeys.filter(key => key !== item.key),
-      );
-
-      if (item.selected === true) {
-        operations._writeLog('Associate this item', item);
-        let relatedRef: EntityReference = { entityType: setting.targetEntityName, id: item.key.toString() };
-        operations._associateRecord(context, setting, targetRef, relatedRef); 
-      }
-      else if (item.selected === false) {
-        operations._writeLog('Disassocatie this item', item);
-        let relatedRef: EntityReference = { entityType: setting.targetEntityName, id: item.key.toString() };
-        operations._disAssociateRecord(context, setting, targetRef, relatedRef);
-      }
+    if (item.selected) {
+      newSelected = [...selectedKeys, item.key as string];
+      const relatedRef: EntityReference = { entityType: setting.targetEntityName, id: String(item.key) };
+      operations._associateRecord(context, setting, targetRef, relatedRef);
+    } else {
+      newSelected = selectedKeys.filter(key => key !== item.key);
+      const relatedRef: EntityReference = { entityType: setting.targetEntityName, id: String(item.key) };
+      operations._disAssociateRecord(context, setting, targetRef, relatedRef);
     }
+
+    setSelectedKeys(newSelected);
+    if (onChange) onChange(newSelected);
   };
 
   return (
     <Dropdown
-      placeholder="---" //Equal to PowerPlatformStandard  //Select options 
-      //label="Multi-select controlled example" // No using a label, Power Platform Provides Label
-      //selectedKeys={selectedKeys}     
-      //@ts-ignore
-      onChange={onChange}
+      placeholder="---"
+      onChange={handleChange}
       multiSelect
-      defaultSelectedKeys={dropdowndata.selectedOptions} //selectedOptions  
-      options={dropdowndata.allOptions} //allOptions 
-      styles={dropdownStyles} 
+      selectedKeys={selectedKeys}
+      options={dropdowndata.allOptions}
+      styles={dropdownStyles}
       disabled={context.mode.isControlDisabled}
     />
   );
