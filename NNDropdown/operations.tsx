@@ -6,6 +6,11 @@ import * as React from 'react';
 import * as dropdown from './fluentUIDropdown';
 
 // ----- helpers -----
+// Make sure webAPIHelper can import this
+export function _writeLog(message: string, data?: any) {
+  console.log(message, data);
+}
+
 function getParam(context: ComponentFramework.Context<IInputs>, name: string): string {
   const p = (context.parameters as unknown as Record<string, any>);
   return p?.[name]?.raw ?? "";

@@ -19,24 +19,32 @@ export const NNDropdownControl: React.FC<{
   const targetRef: EntityReference = { entityType: setting.primaryEntityName, id: setting.primaryEntityId };
   const [selectedKeys, setSelectedKeys] = useState<string[]>(dropdowndata.selectedOptions || []);
 
-  const handleChange = (event: React.FormEvent<HTMLDivElement>, item: IDropdownOption, index: number): void => {
-    if (!item) return;
+// Before:
+// const handleChange = (event: React.FormEvent<HTMLDivElement>, item: IDropdownOption, index: number): void => {
 
-    let newSelected: string[];
+// After:
+const handleChange = (
+  event: React.FormEvent<HTMLDivElement>,
+  option?: IDropdownOption,
+  index?: number
+): void => {
+  if (!option) return;
 
-    if (item.selected) {
-      newSelected = [...selectedKeys, item.key as string];
-      const relatedRef: EntityReference = { entityType: setting.targetEntityName, id: String(item.key) };
-      operations._associateRecord(context, setting, targetRef, relatedRef);
-    } else {
-      newSelected = selectedKeys.filter(key => key !== item.key);
-      const relatedRef: EntityReference = { entityType: setting.targetEntityName, id: String(item.key) };
-      operations._disAssociateRecord(context, setting, targetRef, relatedRef);
-    }
+  let newSelected: string[];
 
-    setSelectedKeys(newSelected);
-    if (onChange) onChange(newSelected);
-  };
+  if (option.selected) {
+    newSelected = [...selectedKeys, option.key as string];
+    const relatedRef: EntityReference = { entityType: setting.targetEntityName, id: String(option.key) };
+    operations._associateRecord(context, setting, targetRef, relatedRef);
+  } else {
+    newSelected = selectedKeys.filter(key => key !== option.key);
+    const relatedRef: EntityReference = { entityType: setting.targetEntityName, id: String(option.key) };
+    operations._disAssociateRecord(context, setting, targetRef, relatedRef);
+  }
+
+  setSelectedKeys(newSelected);
+  if (onChange) onChange(newSelected);
+};
 
   return (
     <Dropdown
